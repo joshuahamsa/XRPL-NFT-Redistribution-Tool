@@ -121,9 +121,6 @@ const ACCOUNTS_INELIGIBLE_FOR_REDISTRIBUTION = ["r3idziPApkZBJmnGq2LtvP5Skrti9uD
         0
       );
 
-      // Calculate distribution and assign NFTs
-      const redistributionMap = {};
-
       // Shuffle the NFTs array using Fisher-Yates algorithm
       const shuffleArray = (array) => {
         for (let i = array.length - 1; i > 0; i--) {
@@ -135,52 +132,96 @@ const ACCOUNTS_INELIGIBLE_FOR_REDISTRIBUTION = ["r3idziPApkZBJmnGq2LtvP5Skrti9uD
 
       let remainingNFTs = shuffleArray([...excludedAccountNFTs]); // Create a shuffled copy
 
-      // First pass: Calculate exact NFT counts
-      Object.entries(ownershipCount).forEach(([owner, count]) => {
-        const proportion = count / totalActiveNFTs;
-        // Use Math.floor instead of Math.round to ensure we don't over-allocate
-        const additionalNFTCount = Math.floor(546 * proportion);
+      // =========================
+      // Modified Redistribution Logic
+      // =========================
 
+      // 1) Determine which owners are eligible (must hold more than 5 NFTs)
+      const eligibleOwners = Object.entries(ownershipCount).filter(
+        ([, count]) => count > 5
+      );
+      // Keep track of total holdings among eligible owners
+      const totalEligibleNFTs = eligibleOwners.reduce(
+        (sum, [, count]) => sum + count,
+        0
+      );
+
+      // We'll store final distribution info in this map
+      const redistributionMap = {};
+
+      // 2) Everyone eligible gets at least 1 NFT:
+      const baseAllocation = 1;
+      const numEligibleOwners = eligibleOwners.length;
+      const totalBaseAllocation = baseAllocation * numEligibleOwners;
+      const REMAINING_TO_DISTRIBUTE = 546 - totalBaseAllocation;
+
+      if (REMAINING_TO_DISTRIBUTE < 0) {
+        console.error(
+          `Error: Not enough NFTs (546) to give at least 1 to each of the ${numEligibleOwners} eligible holders.`
+        );
+      }
+
+      // Initialize redistributionMap
+      eligibleOwners.forEach(([owner, count]) => {
         redistributionMap[owner] = {
           currentCount: count,
-          proportion: proportion,
-          additionalNFTs: additionalNFTCount,
-          newTotal: count + additionalNFTCount,
+          proportion: count / totalEligibleNFTs, // For second-pass distribution
+          additionalNFTs: 0,
+          newTotal: 0,
           assignedNFTDetails: [],
         };
       });
 
-      // Calculate any remaining NFTs due to rounding
-      const totalAllocated = Object.values(redistributionMap).reduce(
-        (sum, details) => sum + details.additionalNFTs,
-        0
-      );
-      const remainingToAllocate = 546 - totalAllocated;
-
-      // Second pass: Distribute remaining NFTs to top holders
-      if (remainingToAllocate > 0) {
-        const sortedOwners = Object.entries(redistributionMap)
-          .sort((a, b) => b[1].currentCount - a[1].currentCount)
-          .slice(0, remainingToAllocate);
-
-        sortedOwners.forEach(([owner]) => {
-          redistributionMap[owner].additionalNFTs += 1;
-          redistributionMap[owner].newTotal += 1;
+      // 3) Distribute the remainder proportionally
+      if (REMAINING_TO_DISTRIBUTE > 0) {
+        // Calculate how many each owner gets in this second pass
+        eligibleOwners.forEach(([owner]) => {
+          const details = redistributionMap[owner];
+          const proportionalShare = Math.floor(
+            REMAINING_TO_DISTRIBUTE * details.proportion
+          );
+          details.additionalNFTs = proportionalShare;
         });
+
+        // 4) Handle leftover due to rounding
+        const totalAllocated = eligibleOwners.reduce(
+          (sum, [owner]) => sum + redistributionMap[owner].additionalNFTs,
+          0
+        );
+        let leftover = REMAINING_TO_DISTRIBUTE - totalAllocated;
+
+        // By default, let's award leftover NFTs to those with the highest current holdings
+        if (leftover > 0) {
+          // Sort descending by current holdings
+          const sortedEligibleOwners = [...eligibleOwners].sort(
+            (a, b) => b[1] - a[1] // b[1] is the count
+          );
+
+          // Give 1 NFT to each of the top owners until leftover is depleted
+          for (let i = 0; i < leftover; i++) {
+            const [owner] = sortedEligibleOwners[i];
+            redistributionMap[owner].additionalNFTs += 1;
+          }
+        }
       }
 
-      // Third pass: Actually assign the NFTs
-      Object.entries(redistributionMap).forEach(([owner, details]) => {
-        const assignedNFTs = remainingNFTs.splice(0, details.additionalNFTs);
-        redistributionMap[owner].assignedNFTDetails = assignedNFTs;
+      // 5) Now everyone has baseAllocation + additionalNFTs
+      eligibleOwners.forEach(([owner]) => {
+        const details = redistributionMap[owner];
+        details.newTotal =
+          details.currentCount + baseAllocation + details.additionalNFTs;
+
+        // Actually splice from the shuffled array
+        const numToAssign = baseAllocation + details.additionalNFTs;
+        details.assignedNFTDetails = remainingNFTs.splice(0, numToAssign);
       });
 
-      // Validation check
+      // 6) Validation check
       const totalRedistributed = Object.values(redistributionMap).reduce(
         (sum, details) => sum + details.assignedNFTDetails.length,
         0
       );
-      if (totalRedistributed !== 546) {
+      if (totalRedistributed !== 546 && REMAINING_TO_DISTRIBUTE >= 0) {
         console.error(
           `Error: Redistribution mismatch. Distributed ${totalRedistributed} NFTs instead of 546`
         );
@@ -190,7 +231,11 @@ const ACCOUNTS_INELIGIBLE_FOR_REDISTRIBUTION = ["r3idziPApkZBJmnGq2LtvP5Skrti9uD
       const ownershipArray = Object.entries(redistributionMap)
         .map(([owner, stats]) => ({
           owner,
-          ...stats,
+          currentCount: stats.currentCount,
+          proportion: stats.proportion,
+          additionalNFTs: stats.additionalNFTs,
+          newTotal: stats.newTotal,
+          assignedNFTDetails: stats.assignedNFTDetails,
         }))
         .sort((a, b) => b.newTotal - a.newTotal);
 
@@ -207,8 +252,13 @@ const ACCOUNTS_INELIGIBLE_FOR_REDISTRIBUTION = ["r3idziPApkZBJmnGq2LtvP5Skrti9uD
       );
       console.log(
         `Unique Owners (excluding ${ACCOUNTS_TO_REDISTRIBUTE_FROM.join(", ")}): ${
-          ownershipArray.length
+          Object.entries(ownershipCount).length
         }`
+      );
+      console.log(
+        `Eligible Owners (>5 NFTs): ${ownershipArray.length} (of ${
+          Object.entries(ownershipCount).length
+        })`
       );
 
       console.log(`\n=== Top 10 Holders After Redistribution ===`);
@@ -251,7 +301,8 @@ const ACCOUNTS_INELIGIBLE_FOR_REDISTRIBUTION = ["r3idziPApkZBJmnGq2LtvP5Skrti9uD
         totalNFTs: nfts.length,
         burnedNFTs: burnedCount,
         excludedAccountNFTs: excludedAccountNFTs.length,
-        uniqueOwners: ownershipArray.length,
+        uniqueOwners: Object.entries(ownershipCount).length,
+        eligibleOwners: ownershipArray.length,
         redistributionDetails: ownershipArray.map((owner) => ({
           ...owner,
           assignedNFTDetails: owner.assignedNFTDetails.map((nft) => ({
