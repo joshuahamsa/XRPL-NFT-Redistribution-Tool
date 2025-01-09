@@ -55,7 +55,7 @@ async function getNFTsByIssuer(issuer, taxon, limit = 500) {
 const ISSUER_ADDRESS = "rEzbi191M5AjrucxXKZWbR5QeyfpbedBcV";
 const TAXON = 1;
 const ACCOUNTS_TO_REDISTRIBUTE_FROM = ["rESvnQrpWVho8kEiHEVKXMBoiUzdkYVtDL"];
-const ACCOUNTS_INELIGIBLE_FOR_REDISTRIBUTION = ["r3idziPApkZBJmnGq2LtvP5Skrti9uDaCx"];
+const ACCOUNTS_INELIGIBLE_FOR_REDISTRIBUTION = ["r3idziPApkZBJmnGq2LtvP5Skrti9uDaCx", "rnriTcd5PRodCSB4GfVV4NynroTsgPnQeb"];
 
 (async () => {
   try {
